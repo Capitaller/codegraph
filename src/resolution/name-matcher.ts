@@ -472,8 +472,8 @@ export function matchByQualifiedName(
   const keepForRef = (nodes: Node[]): Node[] =>
     ref.referenceKind === 'calls'
       ? nodes.filter(
-          (n) => !(n.kind === 'constant' && (n.language === 'yaml' || n.language === 'properties')),
-        )
+        (n) => !(n.kind === 'constant' && (n.language === 'yaml' || n.language === 'properties')),
+      )
       : nodes;
 
   const candidates = keepForRef(context.getNodesByQualifiedName(ref.referenceName));
@@ -1698,8 +1698,8 @@ export function matchMethodCall(
       const importedFqn =
         ref.language === 'java' || ref.language === 'kotlin'
           ? context
-              .getImportMappings(ref.filePath, ref.language)
-              .find((i) => i.localName === inferredType)?.source
+            .getImportMappings(ref.filePath, ref.language)
+            .find((i) => i.localName === inferredType)?.source
           : undefined;
       const typedMatch = nmTimedT('mc-rmot', ref, () => resolveMethodOnType(
         inferredType,
@@ -1839,66 +1839,66 @@ export function matchMethodCall(
   // names like permissionEngine → PermissionRuleEngine.
   if (methodName) {
     const strat3 = nmTimedT('mc-byname', ref, (): ResolvedRef | null => {
-    const methodCandidates = context.getNodesByName(methodName!);
-    // Ubiquitous-method ceiling (#999): a method name re-declared across a
-    // vendored theme/SDK (Metronic's `init`/`update`/… on every widget) yields
-    // K candidates that receiver-word overlap can't reliably disambiguate —
-    // and filtering + scoring all K per call is the O(K²) cost that wedged
-    // "Resolving refs" for 15-28 min. Bail before the O(K) work; Strategy 1/2
-    // (class-name match) already had their precise shot above.
-    if (methodCandidates.length > AMBIGUOUS_NAME_CEILING) {
-      return null;
-    }
-    const methods = methodCandidates.filter(
-      (n) => n.kind === 'method' && n.name === methodName
-    );
-
-    // Filter to same-language candidates first
-    const sameLanguageMethods = methods.filter(m => m.language === ref.language);
-    const targetMethods = sameLanguageMethods.length > 0 ? sameLanguageMethods : methods;
-
-    // If only one same-language method with this name exists, use it
-    if (targetMethods.length === 1 && targetMethods[0]!.language === ref.language) {
-      return {
-        original: ref,
-        targetNodeId: targetMethods[0]!.id,
-        confidence: 0.7,
-        resolvedBy: 'instance-method',
-      };
-    }
-
-    // Multiple methods: score by receiver name word overlap with class name
-    if (targetMethods.length > 1) {
-      const receiverWords = splitCamelCase(objectOrClass!);
-      let bestMatch: typeof targetMethods[0] | undefined;
-      let bestScore = 0;
-
-      // Same-file candidates first, so a score tie (`score > bestScore` keeps
-      // the first seen) resolves to the call site's own file rather than the
-      // first-indexed duplicate (#1079).
-      for (const method of preferCallSiteFile(targetMethods, ref.filePath)) {
-        const classWords = splitCamelCase(method.qualifiedName);
-        let score = receiverWords.filter(w =>
-          classWords.some(cw => cw.toLowerCase() === w.toLowerCase())
-        ).length;
-        // Bonus for same language
-        if (method.language === ref.language) score += 1;
-        if (score > bestScore) {
-          bestScore = score;
-          bestMatch = method;
-        }
+      const methodCandidates = context.getNodesByName(methodName!);
+      // Ubiquitous-method ceiling (#999): a method name re-declared across a
+      // vendored theme/SDK (Metronic's `init`/`update`/… on every widget) yields
+      // K candidates that receiver-word overlap can't reliably disambiguate —
+      // and filtering + scoring all K per call is the O(K²) cost that wedged
+      // "Resolving refs" for 15-28 min. Bail before the O(K) work; Strategy 1/2
+      // (class-name match) already had their precise shot above.
+      if (methodCandidates.length > AMBIGUOUS_NAME_CEILING) {
+        return null;
       }
+      const methods = methodCandidates.filter(
+        (n) => n.kind === 'method' && n.name === methodName
+      );
 
-      if (bestMatch && bestScore >= 2) {
+      // Filter to same-language candidates first
+      const sameLanguageMethods = methods.filter(m => m.language === ref.language);
+      const targetMethods = sameLanguageMethods.length > 0 ? sameLanguageMethods : methods;
+
+      // If only one same-language method with this name exists, use it
+      if (targetMethods.length === 1 && targetMethods[0]!.language === ref.language) {
         return {
           original: ref,
-          targetNodeId: bestMatch.id,
-          confidence: 0.65,
+          targetNodeId: targetMethods[0]!.id,
+          confidence: 0.7,
           resolvedBy: 'instance-method',
         };
       }
-    }
-    return null;
+
+      // Multiple methods: score by receiver name word overlap with class name
+      if (targetMethods.length > 1) {
+        const receiverWords = splitCamelCase(objectOrClass!);
+        let bestMatch: typeof targetMethods[0] | undefined;
+        let bestScore = 0;
+
+        // Same-file candidates first, so a score tie (`score > bestScore` keeps
+        // the first seen) resolves to the call site's own file rather than the
+        // first-indexed duplicate (#1079).
+        for (const method of preferCallSiteFile(targetMethods, ref.filePath)) {
+          const classWords = splitCamelCase(method.qualifiedName);
+          let score = receiverWords.filter(w =>
+            classWords.some(cw => cw.toLowerCase() === w.toLowerCase())
+          ).length;
+          // Bonus for same language
+          if (method.language === ref.language) score += 1;
+          if (score > bestScore) {
+            bestScore = score;
+            bestMatch = method;
+          }
+        }
+
+        if (bestMatch && bestScore >= 2) {
+          return {
+            original: ref,
+            targetNodeId: bestMatch.id,
+            confidence: 0.65,
+            resolvedBy: 'instance-method',
+          };
+        }
+      }
+      return null;
     });
     if (strat3) return strat3;
   }
@@ -2297,12 +2297,22 @@ export function matchReference(
 
   // AL uses case-insensitive implicit workspace resolution.
   // For bare references (no dots), we look up the lowercase name.
+  // Only auto-resolve when the match is unambiguous; otherwise let the
+  // normal strategy chain handle it to avoid mis-resolving (#PR1).
   if (ref.language === 'al' && !ref.referenceName.includes('.')) {
     const lowerName = ref.referenceName.toLowerCase();
     const candidates = context.getNodesByLowerName(lowerName).filter(n => n.language === 'al');
-    if (candidates.length > 0) {
-      const chosen = candidates.length > 1 ? preferCallSiteFile(candidates, ref.filePath) : candidates;
-      if (chosen.length > 0) {
+    if (candidates.length === 1) {
+      return {
+        original: ref,
+        targetNodeId: candidates[0]!.id,
+        confidence: 0.9,
+        resolvedBy: 'exact-match',
+      };
+    }
+    if (candidates.length > 1) {
+      const chosen = preferCallSiteFile(candidates, ref.filePath);
+      if (chosen.length === 1) {
         return {
           original: ref,
           targetNodeId: chosen[0]!.id,
