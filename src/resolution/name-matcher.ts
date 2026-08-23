@@ -2295,6 +2295,24 @@ export function matchReference(
     };
   }
 
+  // AL uses case-insensitive implicit workspace resolution.
+  // For bare references (no dots), we look up the lowercase name.
+  if (ref.language === 'al' && !ref.referenceName.includes('.')) {
+    const lowerName = ref.referenceName.toLowerCase();
+    const candidates = context.getNodesByLowerName(lowerName).filter(n => n.language === 'al');
+    if (candidates.length > 0) {
+      const chosen = candidates.length > 1 ? preferCallSiteFile(candidates, ref.filePath) : candidates;
+      if (chosen.length > 0) {
+        return {
+          original: ref,
+          targetNodeId: chosen[0]!.id,
+          confidence: 0.9,
+          resolvedBy: 'exact-match',
+        };
+      }
+    }
+  }
+
   // Try strategies in order of confidence
   let result: ResolvedRef | null;
 
