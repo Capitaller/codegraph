@@ -1,4 +1,3 @@
-import type { SyntaxNode } from 'web-tree-sitter';
 import type { LanguageExtractor } from '../tree-sitter-types';
 
 export const alExtractor: LanguageExtractor = {
