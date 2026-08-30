@@ -31,19 +31,106 @@ codeunit 50100 "My Test Codeunit"
 `;
 
     const result = await extractFromSource('test.al', source, 'al');
-    
+
     // Should have 1 file node, 1 codeunit class node, and 2 methods (OnRun, MyFunction)
     expect(result.nodes.length).toBeGreaterThanOrEqual(4);
-    
+
     const codeunitNode = result.nodes.find(n => n.kind === 'class' && n.name === '"My Test Codeunit"');
     expect(codeunitNode).toBeDefined();
-    
+
     const myFuncNode = result.nodes.find(n => n.kind === 'method' && n.name === 'MyFunction');
     expect(myFuncNode).toBeDefined();
-    
+
     // Check if the reference to CalculateRounding is picked up
     const refs = result.unresolvedReferences;
     const callRef = refs.find(r => r.referenceName === 'CalculateRounding' && r.referenceKind === 'calls');
     expect(callRef).toBeDefined();
+  });
+
+  it('names enums and interfaces and extracts interface procedures', async () => {
+    const source = `
+enum 50100 "Color"
+{
+    value(0; Red) { }
+    value(1; "Dark Blue") { }
+}
+
+interface "Color Provider"
+{
+    procedure GetColor(): Enum "Color";
+}
+`;
+
+    const result = await extractFromSource('types.al', source, 'al');
+
+    expect(result.nodes.some(n => n.kind === 'enum' && n.name === '"Color"')).toBe(true);
+    expect(result.nodes.some(n => n.kind === 'enum_member' && n.name === 'Red')).toBe(true);
+    expect(result.nodes.some(n => n.kind === 'enum_member' && n.name === '"Dark Blue"')).toBe(true);
+    expect(result.nodes.some(n => n.kind === 'interface' && n.name === '"Color Provider"')).toBe(true);
+    expect(result.nodes.some(n => n.kind === 'method' && n.name === 'GetColor')).toBe(true);
+  });
+
+  it('extracts table fields and nests field triggers beneath them', async () => {
+    const source = `
+table 50101 Customer
+{
+    fields
+    {
+        field(1; Name; Text[100])
+        {
+            trigger OnValidate()
+            begin
+                ValidateName();
+            end;
+        }
+    }
+}
+`;
+
+    const result = await extractFromSource('customer.al', source, 'al');
+    const field = result.nodes.find(n => n.kind === 'field' && n.name === 'Name');
+    const trigger = result.nodes.find(n => n.kind === 'method' && n.name === 'OnValidate');
+
+    expect(field?.qualifiedName).toBe('Customer::Name');
+    expect(trigger?.qualifiedName).toBe('Customer::Name::OnValidate');
+    expect(result.edges).toContainEqual({ source: field?.id, target: trigger?.id, kind: 'contains' });
+    expect(result.unresolvedReferences).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        fromNodeId: trigger?.id,
+        referenceName: 'ValidateName',
+        referenceKind: 'calls',
+      }),
+    ]));
+  });
+
+  it('extracts namespaces, using directives, and extension base objects', async () => {
+    const source = `
+namespace Contoso.Extensions;
+using Microsoft.Sales.Customer;
+
+tableextension 50102 CustomerExtension extends Customer
+{
+}
+`;
+
+    const result = await extractFromSource('customer-extension.al', source, 'al');
+    const namespace = result.nodes.find(n => n.kind === 'namespace');
+    const extension = result.nodes.find(n => n.kind === 'class' && n.name === 'CustomerExtension');
+    const using = result.nodes.find(n => n.kind === 'import');
+
+    expect(namespace?.name).toBe('Contoso.Extensions');
+    expect(extension?.qualifiedName).toBe('Contoso.Extensions::CustomerExtension');
+    expect(using?.name).toBe('Microsoft.Sales.Customer');
+    expect(result.unresolvedReferences).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        fromNodeId: extension?.id,
+        referenceName: 'Customer',
+        referenceKind: 'extends',
+      }),
+      expect.objectContaining({
+        referenceName: 'Microsoft.Sales.Customer',
+        referenceKind: 'imports',
+      }),
+    ]));
   });
 });

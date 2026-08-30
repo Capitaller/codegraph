@@ -1725,6 +1725,8 @@ function inferPhpAssignedPropertyType(
 /**
  * Try to resolve by method name on a class/object
  */
+const AL_DOTTED_MEMBER_RE = /^(.+)\.("(?:[^"]|"")+"|[_\p{L}][_\p{L}\p{N}]*)$/u;
+
 export function matchMethodCall(
   ref: UnresolvedRef,
   context: ResolutionContext
@@ -1746,10 +1748,11 @@ export function matchMethodCall(
   // every downstream strategy compares the method part by exact string
   // equality, so a stray match can't invent an edge.
   const dotMatch =
+    (ref.language === 'al' ? ref.referenceName.match(AL_DOTTED_MEMBER_RE) : null) ??
     ref.referenceName.match(/^([\w.]+)\.(\w+:?(?:\w+:)*)$/) ??
-    (ref.language === 'cpp'
-      ? ref.referenceName.match(/^([\w.]+)\.(operator[^\w\s.]+)$/)
-      : null);
+      (ref.language === 'cpp'
+        ? ref.referenceName.match(/^([\w.]+)\.(operator[^\w\s.]+)$/)
+        : null);
   const colonMatch = ref.referenceName.match(/^(\w+)::(\w+)$/);
   // Lua/Luau method calls use a single colon (`lg:log`); R uses `$` (`lg$log`).
   // Recognize these receiver/method separators so local-variable receiver-type
@@ -2480,6 +2483,122 @@ export function dumpNameMatcherProfile(label: string): void {
   }
 }
 
+const AL_OBJECT_KINDS = new Set<Node['kind']>(['class', 'enum', 'interface']);
+
+function matchAlReference(
+  ref: UnresolvedRef,
+  context: ResolutionContext,
+): ResolvedRef | null | undefined {
+  if (ref.language !== 'al') return undefined;
+
+  const dottedMember = ref.referenceName.match(AL_DOTTED_MEMBER_RE);
+  if (
+    !dottedMember &&
+    (ref.referenceKind === 'extends' ||
+      ref.referenceKind === 'implements' ||
+      ref.referenceKind === 'references' ||
+      ref.referenceKind === 'instantiates')
+  ) {
+    const lowerName = ref.referenceName.toLowerCase();
+    const candidates = context
+      .getNodesByLowerName(lowerName)
+      .filter(
+        (candidate) =>
+          candidate.language === 'al' &&
+          AL_OBJECT_KINDS.has(candidate.kind) &&
+          candidate.name.toLowerCase() === lowerName,
+      );
+
+    if (candidates.length > 0) {
+      const namespaceOf = (candidate: Node): string | null => {
+        const suffix = `::${candidate.name}`;
+        return candidate.qualifiedName.endsWith(suffix)
+          ? candidate.qualifiedName.slice(0, -suffix.length)
+          : null;
+      };
+      const resolved = (
+        candidate: Node,
+        resolvedBy: ResolvedRef['resolvedBy'],
+      ): ResolvedRef => ({
+        original: ref,
+        targetNodeId: candidate.id,
+        confidence: 0.95,
+        resolvedBy,
+      });
+
+      const nodesInFile = context.getNodesInFile(ref.filePath);
+      const currentNamespace = nodesInFile
+        .find((candidate) => candidate.language === 'al' && candidate.kind === 'namespace')
+        ?.name.toLowerCase();
+      const currentMatches = candidates.filter((candidate) => {
+        const namespace = namespaceOf(candidate)?.toLowerCase() ?? null;
+        return currentNamespace ? namespace === currentNamespace : namespace === null;
+      });
+      if (currentMatches.length === 1) return resolved(currentMatches[0]!, 'qualified-name');
+      if (currentMatches.length > 1) return null;
+
+      const importedNamespaces = new Set(
+        nodesInFile
+          .filter((candidate) => candidate.language === 'al' && candidate.kind === 'import')
+          .map((candidate) => candidate.name.toLowerCase()),
+      );
+      const importedMatches = candidates.filter((candidate) => {
+        const namespace = namespaceOf(candidate)?.toLowerCase();
+        return namespace != null && importedNamespaces.has(namespace);
+      });
+      if (importedMatches.length === 1) return resolved(importedMatches[0]!, 'import');
+      if (importedMatches.length > 1) return null;
+    }
+  }
+
+  if (ref.referenceKind === 'calls' && dottedMember) {
+    const methodName = dottedMember[2]!;
+    const lowerMethodName = methodName.toLowerCase();
+    const methodView = (candidate: Node, requestedName = methodName): Node =>
+      candidate.language === 'al' &&
+      candidate.kind === 'method' &&
+      candidate.name.toLowerCase() === lowerMethodName
+        ? { ...candidate, name: requestedName }
+        : candidate;
+    const alContext: ResolutionContext = {
+      ...context,
+      getNodesInFile: (filePath: string) =>
+        context.getNodesInFile(filePath).map((candidate) => methodView(candidate)),
+      getNodesByName: (name: string) =>
+        context
+          .getNodesByLowerName(name.toLowerCase())
+          .filter(
+            (candidate) =>
+              candidate.language === 'al' &&
+              candidate.name.toLowerCase() === name.toLowerCase(),
+          )
+          .map((candidate) => methodView(candidate, name)),
+    };
+    const memberMatch = matchMethodCall(ref, alContext);
+    if (memberMatch) return memberMatch;
+  }
+
+  if (!dottedMember) {
+    const lowerName = ref.referenceName.toLowerCase();
+    const candidates = context
+      .getNodesByLowerName(lowerName)
+      .filter(
+        (candidate) =>
+          candidate.language === 'al' && candidate.name.toLowerCase() === lowerName,
+      );
+    if (candidates.length === 1) {
+      return {
+        original: ref,
+        targetNodeId: candidates[0]!.id,
+        confidence: 0.9,
+        resolvedBy: 'exact-match',
+      };
+    }
+  }
+
+  return undefined;
+}
+
 export function matchReference(
   ref: UnresolvedRef,
   context: ResolutionContext
@@ -2490,6 +2609,9 @@ export function matchReference(
   if (ref.referenceKind === 'function_ref') {
     return matchFunctionRef(ref, context);
   }
+
+  const alMatch = matchAlReference(ref, context);
+  if (alMatch !== undefined) return alMatch;
 
   // ArkTS chained UI attributes — emitted with a leading dot (`.titleStyle`,
   // `.width`) by the extractor — resolve ONLY to decorator-marked attribute
@@ -2548,34 +2670,6 @@ export function matchReference(
     };
   }
 
-
-  // AL uses case-insensitive implicit workspace resolution.
-  // For bare references (no dots), we look up the lowercase name.
-  // Only auto-resolve when the match is unambiguous; otherwise let the
-  // normal strategy chain handle it to avoid mis-resolving (#PR1).
-  if (ref.language === 'al' && !ref.referenceName.includes('.')) {
-    const lowerName = ref.referenceName.toLowerCase();
-    const candidates = context.getNodesByLowerName(lowerName).filter(n => n.language === 'al');
-    if (candidates.length === 1) {
-      return {
-        original: ref,
-        targetNodeId: candidates[0]!.id,
-        confidence: 0.9,
-        resolvedBy: 'exact-match',
-      };
-    }
-    if (candidates.length > 1) {
-      const chosen = preferCallSiteFile(candidates, ref.filePath);
-      if (chosen.length === 1) {
-        return {
-          original: ref,
-          targetNodeId: chosen[0]!.id,
-          confidence: 0.9,
-          resolvedBy: 'exact-match',
-        };
-      }
-    }
-  }
   // Erlang call/fun refs carry the call-site arity (`f/1` — #1610) because
   // arity is part of the function's identity and every erlang function's
   // qualifiedName carries it (`mod::f/1`). Resolve ONLY to a definition of
