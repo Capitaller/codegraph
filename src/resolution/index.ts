@@ -763,35 +763,40 @@ export class ReferenceResolver {
    * Uses the pre-built knownNames set to skip expensive resolution
    * for names that definitely don't exist as symbols.
    */
-  private hasAnyPossibleMatch(name: string): boolean {
+  private hasAnyPossibleMatch(name: string, caseInsensitive = false): boolean {
     if (!this.knownNames) return true; // no pre-filter available
 
+    const hasKnownName = (candidate: string): boolean =>
+      this.knownNames!.has(candidate) ||
+      (caseInsensitive &&
+        this.context.getNodesByLowerName(candidate.toLowerCase()).length > 0);
+
     // Direct name match
-    if (this.knownNames.has(name)) return true;
+    if (hasKnownName(name)) return true;
 
     // For qualified names like "obj.method" or "Class::method", check the parts
     const dotIdx = name.indexOf('.');
     if (dotIdx > 0) {
       const receiver = name.substring(0, dotIdx);
       const member = name.substring(dotIdx + 1);
-      if (this.knownNames.has(receiver) || this.knownNames.has(member)) return true;
+      if (hasKnownName(receiver) || hasKnownName(member)) return true;
       // Also check capitalized receiver (instance-method resolution)
       const capitalized = receiver.charAt(0).toUpperCase() + receiver.slice(1);
-      if (this.knownNames.has(capitalized)) return true;
+      if (hasKnownName(capitalized)) return true;
       // JVM FQN: `com.example.foo.Bar` — the only useful segment is the
       // last one (`Bar`); the earlier check finds `example.foo.Bar` which
       // never matches a node name.
       const lastDot = name.lastIndexOf('.');
       if (lastDot > dotIdx) {
         const tail = name.substring(lastDot + 1);
-        if (tail && this.knownNames.has(tail)) return true;
+        if (tail && hasKnownName(tail)) return true;
       }
     }
     const colonIdx = name.indexOf('::');
     if (colonIdx > 0) {
       const receiver = name.substring(0, colonIdx);
       const member = name.substring(colonIdx + 2);
-      if (this.knownNames.has(receiver) || this.knownNames.has(member)) return true;
+      if (hasKnownName(receiver) || hasKnownName(member)) return true;
       // Multi-segment path `a::b::c` (a Rust/C++ module call like
       // `database::profiles::find`) — the only segment that names a symbol is
       // the last (`c`); `member` above is `b::c`, which never matches a node
@@ -800,7 +805,7 @@ export class ReferenceResolver {
       const lastColon = name.lastIndexOf('::');
       if (lastColon > colonIdx) {
         const tail = name.substring(lastColon + 2);
-        if (tail && this.knownNames.has(tail)) return true;
+        if (tail && hasKnownName(tail)) return true;
       }
     }
 
@@ -814,9 +819,9 @@ export class ReferenceResolver {
       if (sepIdx > 0) {
         const receiver = name.substring(0, sepIdx);
         const member = name.substring(sepIdx + 1);
-        if (this.knownNames.has(member) || this.knownNames.has(receiver)) return true;
+        if (hasKnownName(member) || hasKnownName(receiver)) return true;
         const capitalized = receiver.charAt(0).toUpperCase() + receiver.slice(1);
-        if (this.knownNames.has(capitalized)) return true;
+        if (hasKnownName(capitalized)) return true;
       }
     }
 
@@ -824,7 +829,7 @@ export class ReferenceResolver {
     const slashIdx = name.lastIndexOf('/');
     if (slashIdx > 0) {
       const fileName = name.substring(slashIdx + 1);
-      if (this.knownNames.has(fileName)) return true;
+      if (hasKnownName(fileName)) return true;
     }
 
     return false;
@@ -896,7 +901,7 @@ export class ReferenceResolver {
     const tPre = this.profileStages ? process.hrtime.bigint() : 0n;
     const preFilterPass =
       isNixPathImportRef(ref) ||
-      this.hasAnyPossibleMatch(existenceName) ||
+      this.hasAnyPossibleMatch(existenceName, ref.language === 'al') ||
       this.matchesAnyImport(ref) ||
       this.frameworks.some((f) => f.claimsReference?.(ref.referenceName));
     if (this.profileStages) this.stageAdd('preFilter', ref, preFilterPass, tPre);

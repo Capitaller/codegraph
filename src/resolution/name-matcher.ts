@@ -1722,11 +1722,11 @@ function inferPhpAssignedPropertyType(
   return null;
 }
 
+const AL_DOTTED_MEMBER_RE = /^(.+)\.("(?:[^"]|"")+"|[_\p{L}][_\p{L}\p{N}]*)$/u;
+
 /**
  * Try to resolve by method name on a class/object
  */
-const AL_DOTTED_MEMBER_RE = /^(.+)\.("(?:[^"]|"")+"|[_\p{L}][_\p{L}\p{N}]*)$/u;
-
 export function matchMethodCall(
   ref: UnresolvedRef,
   context: ResolutionContext
@@ -1748,11 +1748,12 @@ export function matchMethodCall(
   // every downstream strategy compares the method part by exact string
   // equality, so a stray match can't invent an edge.
   const dotMatch =
-    (ref.language === 'al' ? ref.referenceName.match(AL_DOTTED_MEMBER_RE) : null) ??
-    ref.referenceName.match(/^([\w.]+)\.(\w+:?(?:\w+:)*)$/) ??
-      (ref.language === 'cpp'
-        ? ref.referenceName.match(/^([\w.]+)\.(operator[^\w\s.]+)$/)
-        : null);
+    ref.language === 'al'
+      ? ref.referenceName.match(AL_DOTTED_MEMBER_RE)
+      : ref.referenceName.match(/^([\w.]+)\.(\w+:?(?:\w+:)*)$/) ??
+        (ref.language === 'cpp'
+          ? ref.referenceName.match(/^([\w.]+)\.(operator[^\w\s.]+)$/)
+          : null);
   const colonMatch = ref.referenceName.match(/^(\w+)::(\w+)$/);
   // Lua/Luau method calls use a single colon (`lg:log`); R uses `$` (`lg$log`).
   // Recognize these receiver/method separators so local-variable receiver-type
@@ -2584,16 +2585,20 @@ function matchAlReference(
       .getNodesByLowerName(lowerName)
       .filter(
         (candidate) =>
-          candidate.language === 'al' && candidate.name.toLowerCase() === lowerName,
+          candidate.language === 'al' &&
+          candidate.kind !== 'import' &&
+          candidate.name.toLowerCase() === lowerName,
       );
-    if (candidates.length === 1) {
+    const chosen = preferCallSiteFile(candidates, ref.filePath);
+    if (chosen.length === 1) {
       return {
         original: ref,
-        targetNodeId: candidates[0]!.id,
+        targetNodeId: chosen[0]!.id,
         confidence: 0.9,
         resolvedBy: 'exact-match',
       };
     }
+    if (chosen.length > 1) return null;
   }
 
   return undefined;
@@ -2715,7 +2720,6 @@ export function matchReference(
       return null;
     }
   }
-
 
   // Try strategies in order of confidence
   let result: ResolvedRef | null;
