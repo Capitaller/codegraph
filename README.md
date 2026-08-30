@@ -258,7 +258,7 @@ With the index available, the agent answers from one to four `codegraph_explore`
 
 ## Built for speed — the Rust kernel
 
-CodeGraph's parsing engine is a **native Rust kernel**: 20 languages — TypeScript, JavaScript, Java, Python, Go, C, C++, Rust, C#, Ruby, PHP, Swift, Kotlin, Scala, Dart, R, Lua, Luau (Metal and CUDA ride the C++ path) — parse in compiled code with one boundary crossing per file. Every language shipped only after its graphs proved **byte-for-byte identical** to the reference engine on real repositories, from small libraries up to the Linux kernel; platforms without a prebuilt binary and files with syntax errors fall back per-file automatically, same graph either way.
+CodeGraph's parsing engine is a **native Rust kernel**: 20 languages — TypeScript, JavaScript, Java, Python, Go, C, C++, Rust, C#, Ruby, PHP, Swift, Kotlin, Scala, Dart, R, Lua, Luau (Metal and CUDA ride the C++ path) — parse in compiled code with one boundary crossing per file. Additional languages such as AL are supported via WASM grammars with the same extraction pipeline. Every language shipped only after its graphs proved **byte-for-byte identical** to the reference engine on real repositories, from small libraries up to the Linux kernel; platforms without a prebuilt binary and files with syntax errors fall back per-file automatically, same graph either way.
 
 **And it scales itself to the machine it's on.** Worker pools, parallel resolution, and analysis caches are sized from what the system actually has — real core counts (container/cgroup-aware, so a VPS that grants 2 cores gets sized for 2, not the host's 64), honestly-measured available RAM on macOS and Linux, and the measured cost of *your* project's resolution work:
 
@@ -278,7 +278,7 @@ CodeGraph's parsing engine is a **native Rust kernel**: 20 languages — TypeScr
 | **Full-Text Search** | Find code by name instantly across your entire codebase, powered by FTS5 |
 | **Impact Analysis** | Trace callers, callees, and the full impact radius of any symbol before making changes |
 | **Always Fresh** | File watcher uses native OS events (FSEvents/inotify/ReadDirectoryChangesW) with debounced auto-sync — the graph stays current as you code, zero config |
-| **20+ Languages** | TypeScript, JavaScript, ArkTS, Python, Go, Rust, Java, C#, VB.NET, PHP, Ruby, C, C++, CUDA, Objective-C, Metal, Swift, Kotlin, Scala, Dart, Lua, Luau, R, Nix, Erlang, CFML, COBOL, Solidity, Terraform/OpenTofu, Svelte, Vue, Astro, Liquid, Pascal/Delphi |
+| **20+ Languages** | TypeScript, JavaScript, ArkTS, Python, Go, Rust, Java, C#, VB.NET, PHP, Ruby, C, C++, CUDA, Objective-C, Metal, Swift, Kotlin, Scala, Dart, Lua, Luau, R, Nix, Erlang, CFML, COBOL, Solidity, Terraform/OpenTofu, Svelte, Vue, Astro, Liquid, Pascal/Delphi, AL (Business Central) |
 | **Framework-aware Routes** | Recognizes web-framework routing files and links URL patterns to their handlers across 17 frameworks |
 | **Mixed iOS / React Native / Expo** | Closes cross-language flows that static parsing misses: Swift ↔ ObjC bridging, React Native legacy bridge + TurboModules + Fabric view components, native → JS event emitters, Expo Modules |
 | **100% Local** | No data leaves your machine. No API keys. No external services. SQLite database only |
@@ -388,6 +388,7 @@ The installer **wires up your agents only — it does not index your code.** Aft
 
 ```bash
 codegraph install --yes                              # auto-detect agents, install global
+codegraph install --yes --init                       # same, then build the current project's index (one-shot bootstrap)
 codegraph install --target=cursor,claude --yes       # explicit target list
 codegraph install --target=auto --location=local     # detected agents, project-local
 codegraph install --target=copilot-vscode,copilot-cli,copilot-jetbrains --yes  # GitHub Copilot everywhere
@@ -400,6 +401,7 @@ codegraph install --print-config copilot-vscode      # same, for Copilot in VS C
 | `--target` | `auto`, `all`, `none`, or csv (`claude,cursor,...`) | prompt |
 | `--location` | `global`, `local` | prompt |
 | `--yes` | (boolean) | prompt every step |
+| `--init` | (boolean) run `codegraph init` in the current directory after wiring agents | — |
 | `--no-permissions` | (boolean) skip Claude auto-allow list | permissions on |
 | `--print-config <id>` | dump snippet for one agent and exit | — |
 
@@ -414,7 +416,7 @@ cd your-project
 codegraph init
 ```
 
-Builds the per-project knowledge graph index, which then auto-syncs on every file change. A single global `codegraph install` works in every project you open — no need to re-run the installer per project.
+Builds the per-project knowledge graph index, which then auto-syncs on every file change. A single global `codegraph install` works in every project you open — no need to re-run the installer per project. Add `--yes` to skip every prompt (scripts / CI / container bootstraps).
 
 That's it — your agent will use CodeGraph tools automatically when a `.codegraph/` directory exists.
 
@@ -873,6 +875,8 @@ Framework routing is validated the same way, on a canonical app per framework: E
 **Missing symbols** — The MCP server auto-syncs on save (wait a couple seconds). Run `codegraph sync` manually if needed. Check that the file's language is supported and isn't inside a `.gitignore`d or default-excluded directory (e.g. `node_modules`, `dist`).
 
 **Sharing one checkout between Windows and WSL** — Don't point both at the same `.codegraph/`: the background-server lock and the SQLite index are tied to the OS that wrote them, and SQLite locking across the WSL2/Windows filesystem boundary is unreliable. Give each side its own index in the same tree by setting `CODEGRAPH_DIR` to a distinct name on one of them — e.g. `CODEGRAPH_DIR=.codegraph-win` on Windows, leaving WSL on the default `.codegraph`. CodeGraph skips any sibling `.codegraph-*` directory when indexing and watching, so the two never trip over each other.
+
+**Very large repositories (hundreds of thousands of files), or a large `.codegraph/codegraph.db-wal` file** — The `-wal` file is SQLite's write-ahead log: writes waiting to be folded into `codegraph.db`. While a big index is being built, CodeGraph lets it grow in proportion to the index (soft threshold = the larger of 256 MB and a quarter of the index size, up to 2 GB) before folding it back, because folding too often is what made large indexes slow on ordinary disks. At rest it is trimmed to 64 MB, and a leftover from a killed session is folded and trimmed the next time the project opens — the index itself has no size limit. Two environment variables tune this: `CODEGRAPH_WAL_VALVE_MB` (the soft threshold during indexing) and `CODEGRAPH_WAL_HEAL_MB` (the resting size and the trim threshold). `CODEGRAPH_WAL_VALVE_DEBUG=1` prints every decision to stderr.
 
 ## License
 
