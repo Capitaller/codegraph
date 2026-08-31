@@ -6,6 +6,8 @@ const AL_EXTENSION_TYPES = new Set([
   'pageextension_declaration',
   'enumextension_declaration',
   'reportextension_declaration',
+  'permissionsetextension_declaration',
+  'profileextension_declaration',
 ]);
 
 const AL_CLASS_TYPES = [
@@ -104,7 +106,14 @@ function extractExtension(node: SyntaxNode, ctx: ExtractorContext): boolean {
 export const alExtractor: LanguageExtractor = {
   functionTypes: [],
   classTypes: AL_CLASS_TYPES,
-  methodTypes: ['procedure', 'procedure_declaration', 'interface_procedure', 'trigger', 'trigger_declaration', 'event_declaration'],
+  methodTypes: [
+    'procedure',
+    'procedure_declaration',
+    'interface_procedure',
+    'trigger',
+    'trigger_declaration',
+    'event_declaration',
+  ],
   interfaceTypes: ['interface_declaration'],
   structTypes: [],
   enumTypes: ['enum_declaration'],
@@ -114,13 +123,10 @@ export const alExtractor: LanguageExtractor = {
   variableTypes: ['variable_declaration'],
   methodsAreTopLevel: false,
   nameField: 'name',
-  resolveName: (node) => {
-    if (AL_OBJECT_NAME_TYPES.has(node.type)) {
-      const objName = node.childForFieldName('object_name');
-      if (objName) return objName.text;
-    }
-    return undefined;
-  },
+  resolveName: (node) =>
+    AL_OBJECT_NAME_TYPES.has(node.type)
+      ? fieldText(node, 'object_name')
+      : undefined,
   visitNode: (node, ctx) => {
     if (AL_EXTENSION_TYPES.has(node.type)) return extractExtension(node, ctx);
     if (node.type === 'field_declaration') return extractField(node, ctx);

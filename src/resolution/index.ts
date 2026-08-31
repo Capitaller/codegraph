@@ -761,13 +761,15 @@ export class ReferenceResolver {
   /**
    * Check if a reference name has any possible match in the codebase.
    * Uses the pre-built knownNames set to skip expensive resolution
-   * for names that definitely don't exist as symbols.
+   * for names that definitely don't exist as symbols. Case-insensitive
+   * languages also consult the cached lowercase-name index.
    */
   private hasAnyPossibleMatch(name: string, caseInsensitive = false): boolean {
-    if (!this.knownNames) return true; // no pre-filter available
+    const knownNames = this.knownNames;
+    if (!knownNames) return true; // no pre-filter available
 
     const hasKnownName = (candidate: string): boolean =>
-      this.knownNames!.has(candidate) ||
+      knownNames.has(candidate) ||
       (caseInsensitive &&
         this.context.getNodesByLowerName(candidate.toLowerCase()).length > 0);
 

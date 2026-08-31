@@ -5,22 +5,6 @@ import type { QueryBuilder } from '../src/db/queries';
 import type { ResolutionContext, UnresolvedRef } from '../src/resolution/types';
 import type { Node } from '../src/types';
 
-function method(id: string, name: string, qualifiedName: string, filePath: string): Node {
-  return {
-    id,
-    kind: 'method',
-    name,
-    qualifiedName,
-    filePath,
-    language: 'al',
-    startLine: 1,
-    endLine: 2,
-    startColumn: 0,
-    endColumn: 0,
-    updatedAt: 0,
-  };
-}
-
 function contextFor(nodes: Node[]): ResolutionContext {
   return {
     getNodesInFile: filePath => nodes.filter(node => node.filePath === filePath),
@@ -95,36 +79,44 @@ function resolverFor(nodes: Node[]): ReferenceResolver {
 
 describe('AL resolution', () => {
   it('resolves member calls case-insensitively', () => {
-    const target = method('target', 'DoWork', 'Target::DoWork', 'target.al');
+    const target = symbol('target', 'method', 'DoWork', 'Target::DoWork', 'target.al');
 
     expect(matchReference(call('service.dowork'), contextFor([target]))?.targetNodeId).toBe(target.id);
   });
 
   it('resolves case-insensitive AL calls through the existing production prefilter', () => {
-    const target = method('target', 'DoWork', 'Target::DoWork', 'target.al');
-    const receiver = symbol('receiver', 'class', 'Service', 'Service', 'service.al');
-    const result = resolverFor([receiver, target]).resolveAll([call('service.dowork')]);
+    const target = symbol('target', 'method', 'DoWork', 'Target::DoWork', 'target.al');
+    const result = resolverFor([target]).resolveAll([
+      call('dowork'),
+      call('service.dowork'),
+    ]);
 
-    expect(result.resolved).toHaveLength(1);
-    expect(result.resolved[0]?.targetNodeId).toBe(target.id);
+    expect(result.resolved.map(ref => ref.targetNodeId)).toEqual([target.id, target.id]);
   });
 
   it('resolves quoted member calls case-insensitively', () => {
-    const target = method('target', '"Do Work"', 'Service::"Do Work"', 'target.al');
+    const target = symbol('target', 'method', '"Do Work"', 'Service::"Do Work"', 'target.al');
 
-    expect(matchReference(call('service."do work"'), contextFor([target]))?.targetNodeId).toBe(target.id);
+    const result = resolverFor([target]).resolveAll([call('service."do work"')]);
+    expect(result.resolved[0]?.targetNodeId).toBe(target.id);
+  });
+
+  it('resolves Unicode member calls using AL identifier rules', () => {
+    const target = symbol('target', 'method', 'Oa\u0301k', 'Service::Oa\u0301k', 'target.al');
+
+    expect(matchReference(call('service.oa\u0301k'), contextFor([target]))?.targetNodeId).toBe(target.id);
   });
 
   it('does not treat dots inside quoted AL identifiers as member separators', () => {
-    const target = method('target', '"Do.Work"', 'Service::"Do.Work"', 'target.al');
+    const target = symbol('target', 'method', '"Do.Work"', 'Service::"Do.Work"', 'target.al');
 
     expect(matchReference(call('service."do.work"'), contextFor([target]))?.targetNodeId).toBe(target.id);
-    expect(matchReference(call('"do.work"'), contextFor([target]))?.targetNodeId).toBe(target.id);
+    expect(resolverFor([target]).resolveAll([call('"do.work"')]).resolved[0]?.targetNodeId).toBe(target.id);
   });
 
   it('does not guess when a case-insensitive member name is ambiguous', () => {
-    const first = method('first', 'DoWork', 'First::DoWork', 'first.al');
-    const second = method('second', 'DOWORK', 'Second::DOWORK', 'second.al');
+    const first = symbol('first', 'method', 'DoWork', 'First::DoWork', 'first.al');
+    const second = symbol('second', 'method', 'DOWORK', 'Second::DOWORK', 'second.al');
 
     expect(matchReference(call('service.dowork'), contextFor([first, second]))).toBeNull();
   });
@@ -159,12 +151,11 @@ describe('AL resolution', () => {
       'caller.al',
     );
     const ref: UnresolvedRef = {
-      ...call('Customer'),
+      ...call('customer'),
       referenceKind: 'extends',
     };
 
-    expect(
-      matchReference(ref, contextFor([currentNamespace, using, wrong, target]))?.targetNodeId,
-    ).toBe(target.id);
+    const result = resolverFor([currentNamespace, using, wrong, target]).resolveAll([ref]);
+    expect(result.resolved[0]?.targetNodeId).toBe(target.id);
   });
 });

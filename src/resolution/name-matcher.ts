@@ -1722,7 +1722,8 @@ function inferPhpAssignedPropertyType(
   return null;
 }
 
-const AL_DOTTED_MEMBER_RE = /^(.+)\.("(?:[^"]|"")+"|[_\p{L}][_\p{L}\p{N}]*)$/u;
+const AL_DOTTED_MEMBER_RE =
+  /^(.+)\.("(?:[^"\n]|"")*"|[_\p{L}\p{Nl}][_\p{L}\p{N}\p{Mn}\p{Mc}\p{Pc}\p{Cf}]*)$/u;
 
 /**
  * Try to resolve by method name on a class/object
@@ -1747,13 +1748,15 @@ export function matchMethodCall(
   // operator form requires at least one non-word char after `operator`, and
   // every downstream strategy compares the method part by exact string
   // equality, so a stray match can't invent an edge.
+  const genericDotMatch =
+    ref.referenceName.match(/^([\w.]+)\.(\w+:?(?:\w+:)*)$/) ??
+    (ref.language === 'cpp'
+      ? ref.referenceName.match(/^([\w.]+)\.(operator[^\w\s.]+)$/)
+      : null);
   const dotMatch =
     ref.language === 'al'
       ? ref.referenceName.match(AL_DOTTED_MEMBER_RE)
-      : ref.referenceName.match(/^([\w.]+)\.(\w+:?(?:\w+:)*)$/) ??
-        (ref.language === 'cpp'
-          ? ref.referenceName.match(/^([\w.]+)\.(operator[^\w\s.]+)$/)
-          : null);
+      : genericDotMatch;
   const colonMatch = ref.referenceName.match(/^(\w+)::(\w+)$/);
   // Lua/Luau method calls use a single colon (`lg:log`); R uses `$` (`lg$log`).
   // Recognize these receiver/method separators so local-variable receiver-type
@@ -2575,8 +2578,7 @@ function matchAlReference(
           )
           .map((candidate) => methodView(candidate, name)),
     };
-    const memberMatch = matchMethodCall(ref, alContext);
-    if (memberMatch) return memberMatch;
+    return matchMethodCall(ref, alContext);
   }
 
   if (!dottedMember) {
